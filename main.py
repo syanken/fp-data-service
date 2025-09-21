@@ -2,8 +2,19 @@ from fastapi import FastAPI
 from data_fetcher import *
 from pydantic import BaseModel
 from data_reader import read_stock_history
+from contextlib import asynccontextmanager
 
-app = FastAPI()
+stock_list = None
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global stock_list
+    stock_list = read_all_stock_list()
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 
 
 @app.get("/")
@@ -14,7 +25,7 @@ def read_root():
 @app.get("/api/all-list")
 def get_all_list():
     return {
-        "data": read_all_stock_list().values.tolist()
+        "data": stock_list.to_dict("records")
     }
 
 
@@ -75,6 +86,8 @@ def get_today_kline(request: KlineRequest):
 
 
 if __name__ == "__main__":
+    # 初始化数据
+    # stock_list = read_all_stock_list()
     import uvicorn
 
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run("main:app", host="127.0.0.1", port=8000)

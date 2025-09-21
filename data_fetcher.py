@@ -377,7 +377,7 @@ def update_daily_history(stock_code: str, adjust: str = "qfq"):
     # 如果文件存在，读最新日期；否则全量
     if os.path.exists(file_path):
         old_df = pd.read_csv(file_path)
-        last_date = old_df['date'].max()
+        last_date = old_df['date'].iat[-1]
         # 防止接口闭市无数据，往前多取 3 天重叠
         start = pd.to_datetime(last_date) - pd.Timedelta(days=3)
         start_str = start.strftime('%Y-%m-%d')
@@ -409,9 +409,12 @@ def read_all_stock_list():
     return df
 
 if __name__ == "__main__":
-    df = read_all_stock_list()
-    for x in df['股票代码']:
-        update_daily_history(x)
-        print(f'更新股票 {x} 日线数据')
+    # stock_list = read_all_stock_list()
+    # for x in stock_list['股票代码']:
+    #     update_daily_history(x)
+    #     print(f'更新股票 {x} 日线数据')
     # df=update_daily_history('sz300059')
     # print(df)
+    trading_day =get_stock_history('sh000001', 'day')['date']
+    last_trading_day = trading_day.iat[-1]
+    print(last_trading_day)
