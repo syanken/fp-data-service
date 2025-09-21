@@ -1,20 +1,13 @@
+import pandas as pd
 from fastapi import FastAPI
-from data_fetcher import *
+from pandas.core.config_init import float_format_doc
+
+from data_fetcher import DataFetcher
 from pydantic import BaseModel
 from data_reader import read_stock_history
-from contextlib import asynccontextmanager
 
-stock_list = None
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    global stock_list
-    stock_list = read_all_stock_list()
-    yield
-
-
-app = FastAPI(lifespan=lifespan)
+fetcher = DataFetcher()
+app = FastAPI()
 
 
 @app.get("/")
@@ -25,7 +18,7 @@ def read_root():
 @app.get("/api/all-list")
 def get_all_list():
     return {
-        "data": stock_list.to_dict("records")
+        "data": fetcher.stock_list.to_dict("records")
     }
 
 
@@ -34,11 +27,7 @@ def get_kline(stock_code: str, type: str = "day"):
     try:
         _df = read_stock_history(stock_code, type)
         if _df.empty:
-            _df = get_stock_history(stock_code, type)
-            num_cols = ['open', 'close', 'high', 'low', 'volume']
-            for c in num_cols:
-                if c in _df.columns:
-                    _df[c] = pd.to_numeric(_df[c], errors='coerce')
+            _df = fetcher.get_stock_history(stock_code, type)
     except Exception as e:
         return {
             "error": str(e)
@@ -69,25 +58,14 @@ class KlineRequest(BaseModel):
     adjust: str = "qfq"
 
 
-@app.get("/api/all_history")
-def get_today_kline(request: KlineRequest):
-    if request.type in ["day", "week", "month", "year"]:
-        try:
-            _df = get_stock_history(request.stock_code, request.type, request.adjust)
-        except Exception as e:
-            return {"error": str(e)}
-        return {
-            "stock_code": request.stock_code,
-            "adjust": request.adjust,
-            "data": _df.values.tolist()
-        }
-    else:
-        return {"error": "type must be day, week, month, year"}
-
-
 if __name__ == "__main__":
-    # 初始化数据
-    # stock_list = read_all_stock_list()
-    import uvicorn
+    # import uvicorn
+    #
+    # uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=False)
+    import requests
 
-    uvicorn.run("main:app", host="127.0.0.1", port=8000)
+    res = requests.get('http://localhost:8000/api/kline?stock_code=sh000001&type=day')
+    data=res.json().get("data")[-1]
+    # data=read_stock_history('sh600001','day')
+    for i in data:
+        print(type(i))

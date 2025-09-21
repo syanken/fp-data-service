@@ -6,3 +6,4 @@ def read_stock_history(stock_code,type) :
     if not os.path.exists(file_path):
         return pd.DataFrame()
     return pd.read_csv(file_path)
+

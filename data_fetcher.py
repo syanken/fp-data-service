@@ -1,192 +1,9 @@
 import datetime
 import os
+from typing import Optional
 
 import pandas as pd
 import requests
-
-
-def normalize_adjust(adjust):
-    if adjust is None:
-        adjust = "qfq"
-    input_str = str(adjust).strip().lower()
-
-    if input_str in ["hfq", "1"]:
-        return "hfq"
-    elif input_str in ["qfq", "2"]:
-        return "qfq"
-    elif input_str in ["nfn", "3", "", "raw"]:
-        return ""
-    else:
-        return "qfq"  # 默认前复权
-
-
-def get_minute_kline(stock_code: str, type: str = "m1", end: str = "", length: int = 800):
-    """
-    获取股票分钟k线数据
-    :param stock_code: 股票代码
-    :param type: k线类型    可选"m1","m5","m15","m30","m60","m120"
-    :param end: 结束日期    格式：yyyyMMddHHmmss
-    :param length: 数据长度  最大800
-    :return: k线数据
-    """
-    url = f"https://ifzq.gtimg.cn/appstock/app/kline/mkline?param={stock_code},{type},{end},{length}"
-    response = requests.get(url)
-    data = response.json()
-    data = data['data'][stock_code][type]
-    return pd.DataFrame(data, columns=['date', 'open', 'close', 'high', 'low', 'volume', '1', 'exchange'])
-
-
-def get_day_kline(stock_code: str, type: str = "day", start: str = "", end: str = "", length: int = 800,
-                  adjust: str = "qfq"):
-    """
-    获取股票日k线数据
-    :param stock_code: 股票代码
-    :param type: k线类型    可选"day","week","month","year"
-    :param start: 开始日期    格式：yyyy-MM-dd
-    :param end: 结束日期    格式：yyyy-MM-dd
-    :param length: 数据长度  最大800
-    :param adjust: 复权类型 可选、"hfq"（后复权） "qfq"（前复权）、""（不复权）
-    :return: k线数据
-    """
-    url_1 = f"https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get?param={stock_code},{type},{start},{end},{length},{adjust}"
-    url_2 = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={stock_code},{type},{start},{end},{length},{adjust}"
-    response = requests.get(url_1)
-    if response.status_code != 200:
-        response = requests.get(url_2)
-    data = response.json()
-    if adjust + type in data['data'][stock_code]:
-        data = data['data'][stock_code][adjust + type]
-    else:
-        data = data['data'][stock_code][type]
-    if not data:
-        return pd.DataFrame()
-    if len(data[0]) == 6:
-        df = pd.DataFrame(data, columns=['date', 'open', 'close', 'high', 'low', 'volume'])
-    elif len(data[0]) == 7:
-        df = pd.DataFrame(data, columns=['date', 'open', 'close', 'high', 'low', 'volume', 'info'])
-    elif len(data[0]) == 10:
-        df = pd.DataFrame(data,
-                          columns=['date', 'open', 'close', 'high', 'low', 'volume', 'info', 'exchange', 'amount',
-                                   'cnt'])
-    elif len(data[0]) == 11:
-        df = pd.DataFrame(data,
-                          columns=['date', 'open', 'close', 'high', 'low', 'volume', 'info', 'exchange', 'amount',
-                                   'cnt',
-                                   ''])
-    else:
-        df = pd.DataFrame(data)
-    return df
-
-
-def get_today_kline(stock_code: str):
-    """
-    获取股票今日k线数据
-    :param stock_code: 股票代码
-    :return: k线数据
-    """
-    url = f"https://web.ifzq.gtimg.cn/appstock/app/minute/query?code={stock_code}"
-    response = requests.get(url)
-    data = response.json()
-    data = data['data'][stock_code]['data']['data']
-    data = [x.split(' ') for x in data]
-    return pd.DataFrame(data, columns=['date', 'close', 'volume', 'amount'])
-
-
-def get_five_day_kline(stock_code: str):
-    """
-    获取股票5日k线数据
-    :param stock_code: 股票代码
-    :return: k线数据
-    """
-    url = f"https://web.ifzq.gtimg.cn/appstock/app/day/query?code={stock_code}"
-    response = requests.get(url)
-    data = response.json()
-    data = data['data'][stock_code]['data']
-    data = [x['data'] for x in data]
-    data = [item for sublist in data for item in sublist]
-    data = [x.split(' ') for x in data]
-    return pd.DataFrame(data, columns=['date', 'close', 'volume', 'amount'])
-
-
-def get_week_kline(stock_code: str, adjust: str = "qfq"):
-    """
-    获取股票周k线数据
-    :param stock_code: 股票代码
-    :param adjust: 复权类型 可选、"hfq"（后复权） "qfq"（前复权）、""（不复权）
-    :return: k线数据
-    """
-    url = f"https://web.ifzq.gtimg.cn/other/klineweb/klineWeb/weekTrends?code={stock_code}&type={adjust}"
-    response = requests.get(url)
-    data = response.json()
-    data = data['data']
-    return pd.DataFrame(data, columns=['date', 'close'])
-
-
-def get_kline_from_qq(stock_code: str, type: str = "day", start: str = "", end: str = "",
-                      length: int = 800, adjust: str = "qfq"):
-    """
-    从腾讯接口拉取 K线数据的通用接口
-    :param stock_code: 股票代码
-    :param type: k线类型    可选"m1","m5","m15","m30","m60","m120"、"1day","5day","day"、"week"、"month"、"year"
-    :param start: 开始日期    格式：yyyy-MM-dd
-    :param end: 结束日期    格式：yyyy-MM-dd
-    :param length: 数据长度  最大800
-    :param adjust: 复权类型 可选、"hfq"（后复权） "qfq"（前复权）、""（不复权）
-    :return: k线数据
-    """
-    # minute_url = f"https://ifzq.gtimg.cn/appstock/app/kline/mkline?param={stock_code},{type},{end},{length}"
-    # day_url_1 = f"https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get?param={stock_code},{type},{start},{end},{length},{adjust}"
-    # day_url_2 = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={stock_code},{type},{start},{end},{length},{adjust}"
-    # today_url = f"https://web.ifzq.gtimg.cn/appstock/app/minute/query?code={stock_code}"
-    # five_day_url = f"https://web.ifzq.gtimg.cn/appstock/app/day/query?code={stock_code}"
-    # week_url = f"https://web.ifzq.gtimg.cn/other/klineweb/klineWeb/weekTrends?code={stock_code}&type={adjust}"
-    adjust = normalize_adjust(adjust)
-    length = min(length, 800)
-    if type in ['m1', 'm5', 'm15', 'm30', 'm60', 'm120']:
-        if end != '':
-            end = end.replace('-', '') + '0000'
-        df = get_minute_kline(stock_code, type, end, length)
-        return df.iloc[:, :6]
-    if type in ['day', 'week', 'month', 'year']:
-        df = get_day_kline(stock_code, type, start, end, length, adjust)
-        return df.iloc[:, :6]
-    if type == '1day':
-        df = get_today_kline(stock_code)
-        return df
-    if type == '5day':
-        df = get_five_day_kline(stock_code)
-        return df
-    else:
-        df = get_week_kline(stock_code, adjust)
-        return df
-
-
-def get_stock_history(stock_code: str, type: str = "day", adjust: str = "qfq"):
-    """
-    下载单个股票全部历史日线（不限长度）
-    内部循环拼接，返回完整 DataFrame
-    """
-    adjust = normalize_adjust(adjust)
-    all_df = []
-    # 腾讯接口最大 800 根，用日期分段
-    # 先取最近 800 根，然后逆推更早的 800 根，直到取不到数据
-    end = ""  # 空表示最新
-    while True:
-        chunk = get_day_kline(stock_code, type, start="", end=end, length=800, adjust=adjust).iloc[:, :6]
-        if not len(chunk):
-            break
-        all_df.append(chunk)
-        # 把最早一根日期作为下一次的 end（逆序往前推）
-        end = chunk.iat[0, 0]  # 最早一根的 date
-        if len(chunk) < 800:  # 已经到头
-            break
-    # 逆序拼接，再按日期正序
-    if chunk.empty:
-        return pd.DataFrame()
-    df = pd.concat(all_df[::-1], ignore_index=True).drop_duplicates(subset=['date']).sort_values('date')
-    # df.to_csv(f"{stock_code}.csv", index=False)
-    return df.reset_index(drop=True)
-
 
 STOCK_FIELDS = {
     'f2': '最新价',
@@ -298,6 +115,21 @@ STOCK_FIELDS = {
 }
 
 
+def normalize_adjust(adjust):
+    if adjust is None:
+        adjust = "qfq"
+    input_str = str(adjust).strip().lower()
+
+    if input_str in ["hfq", "1"]:
+        return "hfq"
+    elif input_str in ["qfq", "2"]:
+        return "qfq"
+    elif input_str in ["nfn", "3", "", "raw"]:
+        return ""
+    else:
+        return "qfq"  # 默认前复权
+
+
 def change_name(df):
     """把东方财富原始单位换算成常用单位，并补充市场前缀"""
 
@@ -334,79 +166,262 @@ def change_name(df):
     return df
 
 
-def get_all_stock_list():
-    """
-    获取所有股票列表
-    :return: 股票列表
-    """
-    import time
-    all_stocks = []
-    page = 1
+class DataFetcher:
+    def __init__(self, session: Optional[requests.Session] = None):
+        self.session = session or requests.Session()
+        self.session.headers.update({
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        })
+        # 可选：设置超时、代理、重试策略等
+        self.timeout = 10
 
-    while True:
+        self.stock_list = self.read_all_stock_list()
+        self.trading_days = self.get_stock_history('sh000001', 'day')['date']  # 获取所有交易日
+
+    def _request(self, url: str) -> dict:
+        """统一请求方法，带错误处理"""
         try:
-            url = f"https://push2.eastmoney.com/api/qt/clist/get?np=1&fltt=1&invt=2&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048&fields=f2,f3,f4,f5,f6,f7,f8,f9,f10,f12,f13,f14,f15,f16,f17,f18,f20,f23,f26&fid=f12&pn={page}&pz=100&po=0&dect=1"
-            response = requests.get(url, timeout=10)
-            if response.status_code != 200:
-                break
-            data = response.json()
-            stocks = (data or {}).get('data', {}).get('diff', [])
-            if not stocks:
-                break
-            all_stocks.extend(stocks)
-            page += 1
-            # 频率控制
-            time.sleep(0.5)
+            response = self.session.get(url, timeout=self.timeout)
+            response.raise_for_status()
+            return response.json()
         except Exception as e:
-            print(f"获取股票列表失败: {e}")
-            break
-    all_stocks = pd.DataFrame(all_stocks)
-    all_stocks.columns = [STOCK_FIELDS.get(fid, fid) for fid in all_stocks.columns]
-    change_name(all_stocks)
-    return all_stocks
+            raise RuntimeError(f"请求失败 {url}: {str(e)}")
 
+    def get_minute_kline(self, stock_code: str, type: str = "m1", end: str = "", length: int = 800) -> pd.DataFrame:
+        """
+        获取股票分钟k线数据
+        :param stock_code: 股票代码
+        :param type: k线类型    可选"m1","m5","m15","m30","m60","m120"
+        :param end: 结束日期    格式：yyyyMMddHHmmss
+        :param length: 数据长度  最大800
+        :return: k线数据
+        """
+        url = f"https://ifzq.gtimg.cn/appstock/app/kline/mkline?param={stock_code},{type},{end},{length}"
+        data = self._request(url)
+        data = data['data'][stock_code][type]
+        df = pd.DataFrame(data, columns=['date', 'open', 'close', 'high', 'low', 'volume', '1', 'exchange'])
+        num_cols = ['open', 'close', 'high', 'low', 'volume']
+        for c in num_cols:
+            if c in df.columns:
+                df[c] = pd.to_numeric(df[c], errors='coerce')
+        return df
 
-def update_daily_history(stock_code: str, adjust: str = "qfq"):
-    """
-    增量更新单个股票日线文件（csv）
-    首次运行会自动全量下载；后续只拉取新增日期
-    """
-    file_path = os.path.join('data', 'day', f"{stock_code}.csv")
-    adjust = normalize_adjust(adjust)
+    def get_day_kline(self, stock_code: str, type: str = "day", start: str = "", end: str = "", length: int = 800,
+                      adjust: str = "qfq") -> pd.DataFrame:
+        """
+        获取股票日k线数据
+        :param stock_code: 股票代码
+        :param type: k线类型    可选"day","week","month","year"
+        :param start: 开始日期    格式：yyyy-MM-dd
+        :param end: 结束日期    格式：yyyy-MM-dd
+        :param length: 数据长度  最大800
+        :param adjust: 复权类型 可选、"hfq"（后复权） "qfq"（前复权）、""（不复权）
+        :return: k线数据
+        """
+        url_1 = f"https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get?param={stock_code},{type},{start},{end},{length},{adjust}"
+        url_2 = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={stock_code},{type},{start},{end},{length},{adjust}"
 
-    # 如果文件存在，读最新日期；否则全量
-    if os.path.exists(file_path):
-        old_df = pd.read_csv(file_path)
-        last_date = old_df['date'].iat[-1]
-        # 防止接口闭市无数据，往前多取 3 天重叠
-        start = pd.to_datetime(last_date) - pd.Timedelta(days=3)
-        start_str = start.strftime('%Y-%m-%d')
-        new_df = get_kline_from_qq(stock_code, 'day', start=start_str, adjust=adjust)
-        _df = pd.concat([old_df, new_df]).drop_duplicates(subset=['date']).sort_values('date')
-    else:
-        _df = get_stock_history(stock_code, 'day', adjust)
+        try:
+            data = self._request(url_1)
+        except:
+            data = self._request(url_2)
+        key = adjust + type if adjust + type in data['data'][stock_code] else type
+        data = data['data'][stock_code][key]
+        if not data:
+            return pd.DataFrame()
+        col_map = {6: ["date", "open", "close", "high", "low", "volume"],
+                   7: ["date", "open", "close", "high", "low", "volume", "info"],
+                   10: ["date", "open", "close", "high", "low", "volume", "info", "ex", "amount", "cnt"],
+                   11: ["date", "open", "close", "high", "low", "volume", "info", "ex", "amount", "cnt", ""]}
+        df = pd.DataFrame(data, columns=col_map.get(len(data[0])))
+        num_cols = ['open', 'close', 'high', 'low', 'volume']
+        for c in num_cols:
+            if c in df.columns:
+                df[c] = pd.to_numeric(df[c], errors='coerce')
+        return df
 
-    # 写回
-    if not _df.empty:
-        os.makedirs(os.path.dirname(file_path), exist_ok=True)
-        _df.to_csv(file_path, index=False)
-    return _df
-
-def read_all_stock_list():
-    cache_stock_data_path = 'data/all_stock_value.csv'
-    if os.path.exists(cache_stock_data_path):
-        if datetime.date.fromtimestamp(os.path.getmtime(cache_stock_data_path)) == datetime.date.today():
-            df = pd.read_csv(cache_stock_data_path, encoding='utf-8')
-            print(f'从文件读取股票列表')
+    def get_today_kline(self, stock_code: str) -> pd.DataFrame:
+        """
+        获取股票今日k线数据
+        :param stock_code: 股票代码
+        :return: k线数据
+        """
+        url = f"https://web.ifzq.gtimg.cn/appstock/app/minute/query?code={stock_code}"
+        data = self._request(url)
+        if 'data' in data and stock_code in data['data'] and 'data' in data['data'][stock_code]:
+            data = data['data'][stock_code]['data']['data']
+            data = [x.split(' ') for x in data]
+            return pd.DataFrame(data, columns=['date', 'close', 'volume', 'amount'])
         else:
-            df = get_all_stock_list()
+            return pd.DataFrame()
+
+    def get_five_day_kline(self, stock_code: str) -> pd.DataFrame:
+        """
+        获取股票5日k线数据
+        :param stock_code: 股票代码
+        :return: k线数据
+        """
+        url = f"https://web.ifzq.gtimg.cn/appstock/app/day/query?code={stock_code}"
+        data = self._request(url)
+        if 'data' in data and stock_code in data['data'] and 'data' in data['data'][stock_code]:
+            data = data['data'][stock_code]['data']
+            data = [x['data'] for x in data]
+            data = [item for sublist in data for item in sublist]
+            data = [x.split(' ') for x in data]
+            return pd.DataFrame(data, columns=['date', 'close', 'volume', 'amount'])
+        else:
+            return pd.DataFrame()
+
+    def get_week_kline(self, stock_code: str, adjust: str = "qfq") -> pd.DataFrame:
+        """
+        获取股票周k线数据
+        :param stock_code: 股票代码
+        :param adjust: 复权类型 可选、"hfq"（后复权） "qfq"（前复权）、""（不复权）
+        :return: k线数据
+        """
+        url = f"https://web.ifzq.gtimg.cn/other/klineweb/klineWeb/weekTrends?code={stock_code}&type={adjust}"
+        data = self._request(url)
+        data = data['data']
+        return pd.DataFrame(data, columns=['date', 'close'])
+
+    def get_kline_from_qq(self, stock_code: str, type: str = "day", start: str = "", end: str = "",
+                          length: int = 800, adjust: str = "qfq") -> pd.DataFrame:
+        """
+        从腾讯接口拉取 K线数据的通用接口
+        :param stock_code: 股票代码
+        :param type: k线类型    可选"m1","m5","m15","m30","m60","m120"、"1day","5day","day"、"week"、"month"、"year"
+        :param start: 开始日期    格式：yyyy-MM-dd
+        :param end: 结束日期    格式：yyyy-MM-dd
+        :param length: 数据长度  最大800
+        :param adjust: 复权类型 可选、"hfq"（后复权） "qfq"（前复权）、""（不复权）
+        :return: k线数据
+        """
+        # minute_url = f"https://ifzq.gtimg.cn/appstock/app/kline/mkline?param={stock_code},{type},{end},{length}"
+        # day_url_1 = f"https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get?param={stock_code},{type},{start},{end},{length},{adjust}"
+        # day_url_2 = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={stock_code},{type},{start},{end},{length},{adjust}"
+        # today_url = f"https://web.ifzq.gtimg.cn/appstock/app/minute/query?code={stock_code}"
+        # five_day_url = f"https://web.ifzq.gtimg.cn/appstock/app/day/query?code={stock_code}"
+        # week_url = f"https://web.ifzq.gtimg.cn/other/klineweb/klineWeb/weekTrends?code={stock_code}&type={adjust}"
+        adjust = normalize_adjust(adjust)
+        length = min(length, 800)
+        if type in ['m1', 'm5', 'm15', 'm30', 'm60', 'm120']:
+            if end != '':
+                end = end.replace('-', '') + '0000'
+            df = self.get_minute_kline(stock_code, type, end, length).iloc[:, :6]
+        elif type in ['day', 'week', 'month', 'year']:
+            df = self.get_day_kline(stock_code, type, start, end, length, adjust).iloc[:, :6]
+        elif type == '1day':
+            df = self.get_today_kline(stock_code)
+        elif type == '5day':
+            df = self.get_five_day_kline(stock_code)
+        else:
+            df = self.get_week_kline(stock_code, adjust)
+        return df
+
+    def get_stock_history(self, stock_code: str, type: str = "day", adjust: str = "qfq"):
+        """
+        下载单个股票全部历史日线（不限长度）
+        内部循环拼接，返回完整 DataFrame
+        """
+        adjust = normalize_adjust(adjust)
+        all_df = []
+        end = ""  # 空表示最新
+        while True:
+            chunk = self.get_day_kline(stock_code, type, start="", end=end, length=800, adjust=adjust).iloc[:, :6]
+            if not len(chunk):
+                break
+            all_df.append(chunk)
+            end = chunk.iat[0, 0]  # 最早一根的 date
+            if len(chunk) < 800:  # 已经到头
+                break
+        if chunk.empty:
+            return pd.DataFrame()
+        df = pd.concat(all_df[::-1], ignore_index=True).drop_duplicates(subset=['date']).sort_values('date')
+        # df.to_csv(f"{stock_code}.csv", index=False)
+        return df.reset_index(drop=True)
+
+    def get_all_stock_list(self):
+        """
+        获取所有股票列表
+        :return: 股票列表
+        """
+        import time
+        all_stocks = []
+        page = 1
+
+        while True:
+            try:
+                url = f"https://push2.eastmoney.com/api/qt/clist/get?np=1&fltt=1&invt=2&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048&fields=f2,f3,f4,f5,f6,f7,f8,f9,f10,f12,f13,f14,f15,f16,f17,f18,f20,f23,f26&fid=f12&pn={page}&pz=100&po=0&dect=1"
+                data = self._request(url)
+                stocks = (data or {}).get('data', {}).get('diff', [])
+                if not stocks:
+                    break
+                all_stocks.extend(stocks)
+                page += 1
+                # 频率控制
+                time.sleep(0.5)
+            except Exception as e:
+                print(f"获取股票列表失败: {e}")
+                break
+        all_stocks = pd.DataFrame(all_stocks)
+        all_stocks.columns = [STOCK_FIELDS.get(fid, fid) for fid in all_stocks.columns]
+        change_name(all_stocks)
+        return all_stocks
+
+    def update_daily_history(self, stock_code: str, adjust: str = "qfq"):
+        """
+        增量更新单个股票日线文件（csv）
+        首次运行会自动全量下载；后续只拉取新增日期
+        """
+        file_path = os.path.join('data', 'day', f"{stock_code}.csv")
+        adjust = normalize_adjust(adjust)
+
+        # 如果文件存在，读最新日期；否则全量
+        if os.path.exists(file_path):
+            old_df = pd.read_csv(file_path)
+            last_date = old_df['date'].iat[-1]
+            if last_date == self.trading_days[-1]:
+                return old_df
+            # 防止接口闭市无数据，往前多取 3 天重叠
+            start = pd.to_datetime(last_date) - pd.Timedelta(days=3)
+            start_str = start.strftime('%Y-%m-%d')
+            new_df = self.get_kline_from_qq(stock_code, 'day', start=start_str, adjust=adjust)
+            _df = pd.concat([old_df, new_df]).drop_duplicates(subset=['date']).sort_values('date')
+        else:
+            _df = self.get_stock_history(stock_code, 'day', adjust)
+
+        # 写回
+        if not _df.empty:
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+            _df.to_csv(file_path, index=False)
+        return _df
+
+    def read_all_stock_list(self):
+        cache_stock_data_path = 'data/all_stock_value.csv'
+        if os.path.exists(cache_stock_data_path):
+            if datetime.date.fromtimestamp(os.path.getmtime(cache_stock_data_path)) == datetime.date.today():
+                df = pd.read_csv(cache_stock_data_path, encoding='utf-8')
+                print(f'从文件读取股票列表')
+            else:
+                df = self.get_all_stock_list()
+                df.to_csv(cache_stock_data_path, encoding='utf-8', index=False)
+                print(f'从接口获取股票列表')
+        else:
+            df = self.get_all_stock_list()
             df.to_csv(cache_stock_data_path, encoding='utf-8', index=False)
             print(f'从接口获取股票列表')
-    else:
-        df = get_all_stock_list()
-        df.to_csv(cache_stock_data_path, encoding='utf-8', index=False)
-        print(f'从接口获取股票列表')
-    return df
+        return df
+
+    def get_trading_days(self):
+        """
+        获取股票的所有交易日
+        :return: 所有交易日
+        """
+        df = self.get_stock_history('sh000001', 'day')
+        if df.empty:
+            return []
+        return df['date'].tolist()
+
 
 if __name__ == "__main__":
     # stock_list = read_all_stock_list()
@@ -415,6 +430,7 @@ if __name__ == "__main__":
     #     print(f'更新股票 {x} 日线数据')
     # df=update_daily_history('sz300059')
     # print(df)
-    trading_day =get_stock_history('sh000001', 'day')['date']
-    last_trading_day = trading_day.iat[-1]
-    print(last_trading_day)
+    fetcher = DataFetcher()
+    data = fetcher.get_stock_history('sh000001', 'day')
+    for i in data.iloc[-1]:
+        print(type(i))
