@@ -1,4 +1,5 @@
 import datetime
+import json
 import os
 from typing import Optional
 
@@ -176,7 +177,9 @@ class DataFetcher:
         self.timeout = 10
 
         self.stock_list = self.read_all_stock_list()
-        self.trading_days = self.get_stock_history('sh000001', 'day')['date']  # 获取所有交易日
+        self.trading_days = self.get_trading_days()
+        print(self.trading_days)
+        self.update_all_stock_history()
 
     def _request(self, url: str) -> dict:
         """统一请求方法，带错误处理"""
@@ -318,7 +321,7 @@ class DataFetcher:
             df = self.get_week_kline(stock_code, adjust)
         return df
 
-    def get_stock_history(self, stock_code: str, type: str = "day", adjust: str = "qfq"):
+    def get_stock_history(self, stock_code: str, type: str = "day", start: str = "", adjust: str = "qfq"):
         """
         下载单个股票全部历史日线（不限长度）
         内部循环拼接，返回完整 DataFrame
@@ -327,7 +330,7 @@ class DataFetcher:
         all_df = []
         end = ""  # 空表示最新
         while True:
-            chunk = self.get_day_kline(stock_code, type, start="", end=end, length=800, adjust=adjust).iloc[:, :6]
+            chunk = self.get_day_kline(stock_code, type, start=start, end=end, length=800, adjust=adjust).iloc[:, :6]
             if not len(chunk):
                 break
             all_df.append(chunk)
@@ -368,6 +371,29 @@ class DataFetcher:
         change_name(all_stocks)
         return all_stocks
 
+    def get_trading_days(self):
+        """缓存交易日历，避免重复获取"""
+        cache_file = 'data/trading_days.json'
+
+        # 检查缓存是否存在且有效
+        trading_days = [] if not os.path.exists(cache_file) else json.load(open(cache_file))['trading_days']
+        last_day = trading_days[-1] if trading_days else ""
+        if last_day:
+            last_day = pd.to_datetime(last_day) + pd.Timedelta(days=1)
+            last_day = last_day.strftime('%Y-%m-%d')
+        df = self.get_stock_history('sh000001', 'day', start=last_day)
+        if not df.empty:
+            trading_days = trading_days + df['date'].tolist()
+
+        # 保存缓存
+        os.makedirs(os.path.dirname(cache_file), exist_ok=True)
+        with open(cache_file, 'w') as f:
+            json.dump({
+                'trading_days': trading_days
+            }, f)
+
+        return trading_days
+
     def update_daily_history(self, stock_code: str, adjust: str = "qfq"):
         """
         增量更新单个股票日线文件（csv）
@@ -382,8 +408,7 @@ class DataFetcher:
             last_date = old_df['date'].iat[-1]
             if last_date == self.trading_days[-1]:
                 return old_df
-            # 防止接口闭市无数据，往前多取 3 天重叠
-            start = pd.to_datetime(last_date) - pd.Timedelta(days=3)
+            start = pd.to_datetime(last_date) + pd.Timedelta(days=1)
             start_str = start.strftime('%Y-%m-%d')
             new_df = self.get_kline_from_qq(stock_code, 'day', start=start_str, adjust=adjust)
             _df = pd.concat([old_df, new_df]).drop_duplicates(subset=['date']).sort_values('date')
@@ -412,15 +437,18 @@ class DataFetcher:
             print(f'从接口获取股票列表')
         return df
 
-    def get_trading_days(self):
-        """
-        获取股票的所有交易日
-        :return: 所有交易日
-        """
-        df = self.get_stock_history('sh000001', 'day')
-        if df.empty:
-            return []
-        return df['date'].tolist()
+
+    def update_all_stock_history(self):
+        cnt = 0
+        self.stock_list = self.read_all_stock_list()
+        for stock_code in self.stock_list['股票代码']:
+            try:
+                self.update_daily_history(stock_code)
+                cnt += 1
+                print(f'更新股票 {stock_code} 成功')
+            except Exception as e:
+                print(f'更新股票 {stock_code} 失败: {e}')
+        print(f'更新所有股票日线数据,更新了 {cnt} 只股票')
 
 
 if __name__ == "__main__":
