@@ -1,13 +1,40 @@
-import pandas as pd
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
-from pandas.core.config_init import float_format_doc
 
 from data_fetcher import DataFetcher
 from pydantic import BaseModel
 from data_reader import read_stock_history
 
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
+import pytz
+
 fetcher = DataFetcher()
-app = FastAPI()
+scheduler = BackgroundScheduler(timezone=pytz.timezone('Asia/Shanghai'))  # 设置为中国时区
+# 添加定时任务：每天 16:00 执行
+scheduler.add_job(
+    fetcher.update_all_stock_history,
+    'cron',
+    hour=16,
+    minute=0,
+    id='update_stock_data_daily',
+    replace_existing=True,
+    name='每日16:00更新股票数据'
+)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # 启动事件
+    scheduler.start()
+    print("⏰ 定时任务调度器已启动")
+    yield
+    # 关闭事件
+    scheduler.shutdown()
+    print("⏰ 定时任务调度器已关闭")
+
+
+app = FastAPI(lifespan=lifespan)
 
 
 @app.get("/")
@@ -65,7 +92,10 @@ if __name__ == "__main__":
     import requests
 
     res = requests.get('http://localhost:8000/api/kline?stock_code=sh000001&type=day')
-    data=res.json().get("data")[-1]
+    data = res.json().get("data")[-1]
     # data=read_stock_history('sh600001','day')
     for i in data:
         print(type(i))
+
+
+# uvicorn main:app --host 127.0.0.1 --port 8000 --reload
