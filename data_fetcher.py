@@ -512,7 +512,7 @@ class DataFetcher:
                     try:
                         old_df = pd.read_csv(os.path.join('data', 'day', f"{c}.csv"))
                     except Exception as e:
-                        old_df = pd.DataFrame()
+                        old_df = pd.DataFrame(columns=['date', 'open', 'close', 'high', 'low', 'volume'])
                     # 往前多取几天，防止数据不完整，处理复权问题
                     common_dates = _df['date'].isin(old_df['date'])
                     overlap1 = _df[common_dates].set_index('date').sort_index()[
