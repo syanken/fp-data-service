@@ -13,7 +13,7 @@ fetcher = DataFetcher()
 scheduler = BackgroundScheduler(timezone=pytz.timezone('Asia/Shanghai'))  # 设置为中国时区
 # 添加定时任务：每天 16:00 执行
 scheduler.add_job(
-    fetcher.update_all_stock_history,
+    fetcher.update_all_data,
     'cron',
     hour=16,
     minute=0,
@@ -54,7 +54,7 @@ def get_kline(stock_code: str, type: str = "day"):
     try:
         _df = read_stock_history(stock_code, type)
         if _df.empty:
-            _df = fetcher.get_stock_history(stock_code, type)
+            _df = fetcher.get_history(stock_code, type)
     except Exception as e:
         return {
             "error": str(e)

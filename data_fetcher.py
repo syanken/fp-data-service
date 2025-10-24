@@ -1,10 +1,13 @@
 import datetime
-import json
 import os
+import threading
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 import requests
+
+from ts import *
 
 STOCK_FIELDS = {
     'f2': '最新价',
@@ -169,20 +172,22 @@ def change_name(df):
 
 class DataFetcher:
     def __init__(self, session: Optional[requests.Session] = None):
+        self.trading_days_file = 'data/trading_days.csv'
+
         self.session = session or requests.Session()
         self.session.headers.update({
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         })
-        # 可选：设置超时、代理、重试策略等
         self.timeout = 10
-
-        self.stock_list = self.read_all_stock_list()
-        self.trading_days = self.get_trading_days()
-        print(self.trading_days)
-        self.update_all_stock_history()
+        if not os.path.exists('data/'):
+            os.makedirs('data/')
+        self.stock_list = self.read_all_stock_list()  # 慢
+        self.trading_days, self.last_day = self.read_trading_days()
+        self.stock_metadata = self.get_stock_metadata()
+        # threading.Thread(target=self.update_all_stock_history, daemon=True).start()
 
     def _request(self, url: str) -> dict:
-        """统一请求方法，带错误处理"""
+        """统一请求方法"""
         try:
             response = self.session.get(url, timeout=self.timeout)
             response.raise_for_status()
@@ -190,7 +195,7 @@ class DataFetcher:
         except Exception as e:
             raise RuntimeError(f"请求失败 {url}: {str(e)}")
 
-    def get_minute_kline(self, stock_code: str, type: str = "m1", end: str = "", length: int = 800) -> pd.DataFrame:
+    def _get_minute_kline(self, stock_code: str, type: str = "m1", end: str = "", length: int = 800) -> pd.DataFrame:
         """
         获取股票分钟k线数据
         :param stock_code: 股票代码
@@ -209,8 +214,8 @@ class DataFetcher:
                 df[c] = pd.to_numeric(df[c], errors='coerce')
         return df
 
-    def get_day_kline(self, stock_code: str, type: str = "day", start: str = "", end: str = "", length: int = 800,
-                      adjust: str = "qfq") -> pd.DataFrame:
+    def _get_day_kline(self, stock_code: str, type: str = "day", start: str = "", end: str = "", length: int = 800,
+                       adjust: str = "qfq") -> pd.DataFrame:
         """
         获取股票日k线数据
         :param stock_code: 股票代码
@@ -228,6 +233,8 @@ class DataFetcher:
             data = self._request(url_1)
         except:
             data = self._request(url_2)
+        if not data['data']:
+            return pd.DataFrame()
         key = adjust + type if adjust + type in data['data'][stock_code] else type
         data = data['data'][stock_code][key]
         if not data:
@@ -241,9 +248,10 @@ class DataFetcher:
         for c in num_cols:
             if c in df.columns:
                 df[c] = pd.to_numeric(df[c], errors='coerce')
+        df["volume"] = df["volume"].astype(int)
         return df
 
-    def get_today_kline(self, stock_code: str) -> pd.DataFrame:
+    def _get_today_kline(self, stock_code: str) -> pd.DataFrame:
         """
         获取股票今日k线数据
         :param stock_code: 股票代码
@@ -258,7 +266,7 @@ class DataFetcher:
         else:
             return pd.DataFrame()
 
-    def get_five_day_kline(self, stock_code: str) -> pd.DataFrame:
+    def _get_five_day_kline(self, stock_code: str) -> pd.DataFrame:
         """
         获取股票5日k线数据
         :param stock_code: 股票代码
@@ -275,7 +283,7 @@ class DataFetcher:
         else:
             return pd.DataFrame()
 
-    def get_week_kline(self, stock_code: str, adjust: str = "qfq") -> pd.DataFrame:
+    def _get_week_kline(self, stock_code: str, adjust: str = "qfq") -> pd.DataFrame:
         """
         获取股票周k线数据
         :param stock_code: 股票代码
@@ -310,18 +318,18 @@ class DataFetcher:
         if type in ['m1', 'm5', 'm15', 'm30', 'm60', 'm120']:
             if end != '':
                 end = end.replace('-', '') + '0000'
-            df = self.get_minute_kline(stock_code, type, end, length).iloc[:, :6]
+            df = self._get_minute_kline(stock_code, type, end, length).iloc[:, :6]
         elif type in ['day', 'week', 'month', 'year']:
-            df = self.get_day_kline(stock_code, type, start, end, length, adjust).iloc[:, :6]
+            df = self._get_day_kline(stock_code, type, start, end, length, adjust).iloc[:, :6]
         elif type == '1day':
-            df = self.get_today_kline(stock_code)
+            df = self._get_today_kline(stock_code)
         elif type == '5day':
-            df = self.get_five_day_kline(stock_code)
+            df = self._get_five_day_kline(stock_code)
         else:
-            df = self.get_week_kline(stock_code, adjust)
+            df = self._get_week_kline(stock_code, adjust)
         return df
 
-    def get_stock_history(self, stock_code: str, type: str = "day", start: str = "", adjust: str = "qfq"):
+    def get_history(self, stock_code: str, type: str = "day", start: str = "", adjust: str = "qfq"):
         """
         下载单个股票全部历史日线（不限长度）
         内部循环拼接，返回完整 DataFrame
@@ -330,11 +338,13 @@ class DataFetcher:
         all_df = []
         end = ""  # 空表示最新
         while True:
-            chunk = self.get_day_kline(stock_code, type, start=start, end=end, length=800, adjust=adjust).iloc[:, :6]
+            chunk = self._get_day_kline(stock_code, type, start=start, end=end, length=800, adjust=adjust).iloc[:, :6]
             if not len(chunk):
                 break
             all_df.append(chunk)
             end = chunk.iat[0, 0]  # 最早一根的 date
+            if start and end <= start:  # 已经到头
+                break
             if len(chunk) < 800:  # 已经到头
                 break
         if chunk.empty:
@@ -356,7 +366,7 @@ class DataFetcher:
             try:
                 url = f"https://push2.eastmoney.com/api/qt/clist/get?np=1&fltt=1&invt=2&fs=m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048&fields=f2,f3,f4,f5,f6,f7,f8,f9,f10,f12,f13,f14,f15,f16,f17,f18,f20,f23,f26&fid=f12&pn={page}&pz=100&po=0&dect=1"
                 data = self._request(url)
-                stocks = (data or {}).get('data', {}).get('diff', [])
+                stocks = ((data or {}).get('data') or {}).get('diff', [])
                 if not stocks:
                     break
                 all_stocks.extend(stocks)
@@ -365,34 +375,44 @@ class DataFetcher:
                 time.sleep(0.5)
             except Exception as e:
                 print(f"获取股票列表失败: {e}")
-                break
+                return None
         all_stocks = pd.DataFrame(all_stocks)
         all_stocks.columns = [STOCK_FIELDS.get(fid, fid) for fid in all_stocks.columns]
         change_name(all_stocks)
         return all_stocks
 
-    def get_trading_days(self):
-        """缓存交易日历，避免重复获取"""
-        cache_file = 'data/trading_days.json'
+    def read_trading_days(self):
+        """
+        读取交易日历
+        :return: 交易日历列表, 最新交易日
+        """
+        if not os.path.exists(self.trading_days_file):
+            trading_days = self.update_trading_days()
+            return trading_days, '1970-01-01'
+        _df = pd.read_csv(self.trading_days_file)
+        return _df['trading_days'].tolist(), _df.iat[-1, 0]
 
-        # 检查缓存是否存在且有效
-        trading_days = [] if not os.path.exists(cache_file) else json.load(open(cache_file))['trading_days']
-        last_day = trading_days[-1] if trading_days else ""
-        if last_day:
-            last_day = pd.to_datetime(last_day) + pd.Timedelta(days=1)
-            last_day = last_day.strftime('%Y-%m-%d')
-        df = self.get_stock_history('sh000001', 'day', start=last_day)
-        if not df.empty:
-            trading_days = trading_days + df['date'].tolist()
-
-        # 保存缓存
-        os.makedirs(os.path.dirname(cache_file), exist_ok=True)
-        with open(cache_file, 'w') as f:
-            json.dump({
-                'trading_days': trading_days
-            }, f)
-
-        return trading_days
+    def update_trading_days(self):
+        """
+        更新交易日历
+        :return: 交易日历列表,
+        """
+        if not os.path.exists(self.trading_days_file):
+            _df = self.get_history('sh000001', 'day')
+            if not _df.empty:
+                trading_days = _df['date'].tolist()
+                pd.DataFrame({'trading_days': trading_days}).to_csv(self.trading_days_file, index=False)
+                return trading_days
+        else:
+            _df = pd.read_csv(self.trading_days_file)
+            trading_days = _df['trading_days'].tolist()
+            if not _df.empty:
+                last_day = _df.iat[-1, 0]
+                _df = self.get_history('sh000001', 'day', start=last_day)
+                if not _df.empty:
+                    trading_days = sorted(set(trading_days + _df['date'].tolist()))
+                    pd.DataFrame({'trading_days': trading_days}).to_csv(self.trading_days_file, index=False)
+                    return trading_days
 
     def update_daily_history(self, stock_code: str, adjust: str = "qfq"):
         """
@@ -413,7 +433,7 @@ class DataFetcher:
             new_df = self.get_kline_from_qq(stock_code, 'day', start=start_str, adjust=adjust)
             _df = pd.concat([old_df, new_df]).drop_duplicates(subset=['date']).sort_values('date')
         else:
-            _df = self.get_stock_history(stock_code, 'day', adjust)
+            _df = self.get_history(stock_code, 'day', adjust)
 
         # 写回
         if not _df.empty:
@@ -433,32 +453,124 @@ class DataFetcher:
                 print(f'从接口获取股票列表')
         else:
             df = self.get_all_stock_list()
+            if df is None:
+                return None
             df.to_csv(cache_stock_data_path, encoding='utf-8', index=False)
             print(f'从接口获取股票列表')
         return df
 
+    def update_all_data(self):
+        """
+        更新所有数据
+        1.更新最新所有股票列表
+        2.更新元数据表
+        3.更新所有股票日线数据
+        """
+        print('开始更新所有数据')
+        # self.stock_list = self.read_all_stock_list()
+        self.trading_days = self.update_trading_days()
+        self.stock_metadata = pd.read_csv('data/stock_metadata.csv')
+        codes_in_list = set(self.stock_list['股票代码'])
+        mask_keep = self.stock_metadata['stock_code'].isin(codes_in_list)
+        keep_stocks = self.stock_metadata[mask_keep].copy()
+        existing_codes = set(self.stock_metadata['stock_code'])
+        new_codes = self.stock_list['股票代码'][~self.stock_list['股票代码'].isin(existing_codes)].unique()
+        new_stocks = pd.DataFrame({
+            'stock_code': new_codes,
+            'latest_trade_date': pd.NaT,
+            'earliest_trade_date': pd.NaT,
+            'last_sync_time': pd.NaT,
+            'exchange': [code[:2] for code in new_codes],  # 提取 sz/sh/bj
+            'status': 'Unknown'  # 后续可更新
+        })
+        updated_metadata = pd.concat([keep_stocks, new_stocks], ignore_index=True)
 
-    def update_all_stock_history(self):
-        cnt = 0
-        self.stock_list = self.read_all_stock_list()
-        for stock_code in self.stock_list['股票代码']:
-            try:
-                self.update_daily_history(stock_code)
-                cnt += 1
-                print(f'更新股票 {stock_code} 成功')
-            except Exception as e:
-                print(f'更新股票 {stock_code} 失败: {e}')
-        print(f'更新所有股票日线数据,更新了 {cnt} 只股票')
+        need_update = updated_metadata[(updated_metadata['status'].isin(['Active', 'Halting', 'Unknown']))]
+        for c in need_update[need_update['status'].isin(['Halting', 'Unknown'])]['stock_code'].tolist():
+            _df = self.get_history(stock_code=c)
+            if not _df.empty:
+                _df.to_csv(os.path.join('data', 'day', f"{c}.csv"), index=False)
+                updated_metadata.loc[updated_metadata['stock_code'] == c, 'latest_trade_date'] = _df.iat[
+                    -1, _df.columns.get_loc('date')]
+                updated_metadata.loc[updated_metadata['stock_code'] == c, 'earliest_trade_date'] = _df.iat[
+                    0, _df.columns.get_loc('date')]
+                updated_metadata.loc[updated_metadata['stock_code'] == c, 'last_sync_time'] = self.last_day
+        # print(updated_metadata)
+        need_update_list = need_update[need_update['status'].isin(['Active'])]['stock_code'].tolist()
+        pos = 0
+        for i, d in enumerate(self.trading_days):
+            if d == self.last_day:
+                pos = i
+                break
+        update_dates = self.trading_days[max(0, pos - 2):]
+        res = ts_get_daily_data(trade_days=update_dates)
+        self.last_day = self.trading_days[-1]
+        if not res.empty:
+            for c in need_update_list:
+                _df = res[res['stock_code'] == c].drop('stock_code', axis=1)
+                if not _df.empty:
+                    try:
+                        old_df = pd.read_csv(os.path.join('data', 'day', f"{c}.csv"))
+                    except Exception as e:
+                        old_df = pd.DataFrame()
+                    # 往前多取几天，防止数据不完整，处理复权问题
+                    common_dates = _df['date'].isin(old_df['date'])
+                    overlap1 = _df[common_dates].set_index('date').sort_index()[
+                        ['open', 'high', 'low', 'close', 'volume']]
+                    overlap2 = old_df[old_df['date'].isin(_df['date'])].set_index('date').sort_index()[
+                        ['open', 'high', 'low', 'close', 'volume']]
+                    if overlap1.equals(overlap2):
+                        old_df = old_df[~old_df['date'].isin(_df['date'])]
+                        _df = pd.concat([old_df, _df])
+                    else:
+                        print(f' {c} 重新下载')
+                        _df = self.get_history(stock_code=c)
+
+                    _df.to_csv(os.path.join('data', 'day', f"{c}.csv"), index=False)
+                    updated_metadata.loc[updated_metadata['stock_code'] == c, 'latest_trade_date'] = _df.iat[
+                        -1, _df.columns.get_loc('date')]
+                    updated_metadata.loc[updated_metadata['stock_code'] == c, 'earliest_trade_date'] = _df.iat[
+                        0, _df.columns.get_loc('date')]
+                    updated_metadata.loc[updated_metadata['stock_code'] == c, 'last_sync_time'] = self.last_day
+
+        updated_metadata = self.set_status(updated_metadata)
+        updated_metadata.to_csv('data/stock_metadata.csv', index=False)
+        self.stock_metadata = updated_metadata
+        print('所有数据更新完成')
+
+    def get_stock_metadata(self):
+        if not os.path.exists('data/stock_metadata.csv'):
+            if self.stock_list is None:
+                return pd.DataFrame()
+            else:
+                meta = pd.DataFrame()
+                meta['stock_code'] = self.stock_list['股票代码'].copy()
+                meta['latest_trade_date'] = pd.NaT
+                meta['earliest_trade_date'] = pd.NaT
+                meta['last_sync_time'] = pd.NaT
+                meta['exchange'] = self.stock_list['股票代码'].str[:2]
+                meta['status'] = 'Unknown'
+                meta = self.set_status(meta)
+                meta.to_csv('data/stock_metadata.csv', index=False)
+                return meta
+        else:
+            return pd.read_csv('data/stock_metadata.csv')
+
+    def set_status(self, meta):
+        temp_df = self.stock_list[['最新价', '市盈率', '上市日期']].replace('-', np.nan)
+        latest_price = temp_df['最新价']
+        volume_ratio = temp_df['市盈率']
+        listing_date = temp_df['上市日期']
+        is_active = latest_price.notna()  # 最新价有数据
+        is_halting = ~is_active & volume_ratio.notna()  # 最新价无数据但市盈率有数据
+        is_unlisted = listing_date.isna()  # 无上市日期 → 未上市
+        meta.loc[is_active, 'status'] = 'Active'
+        meta.loc[is_halting, 'status'] = 'Halting'
+        meta.loc[is_unlisted, 'status'] = 'Unlisted'
+        meta.loc[~is_active & ~is_halting & ~is_unlisted, 'status'] = 'Delisted'
+        return meta
 
 
 if __name__ == "__main__":
-    # stock_list = read_all_stock_list()
-    # for x in stock_list['股票代码']:
-    #     update_daily_history(x)
-    #     print(f'更新股票 {x} 日线数据')
-    # df=update_daily_history('sz300059')
-    # print(df)
     fetcher = DataFetcher()
-    data = fetcher.get_stock_history('sh000001', 'day')
-    for i in data.iloc[-1]:
-        print(type(i))
+    fetcher.update_all_data()

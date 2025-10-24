@@ -12,7 +12,7 @@
 - RESTful 接口，自带 OpenAPI 文档（/docs）
 - Docker 一键打包，支持 `docker-compose` 快速部署
 
----
+
 
 ## 🚀 快速开始
 
@@ -50,3 +50,8 @@ cd fp-data-service
     ...
   ]
 }
+
+## 数据来源
+
+- 股票数据：[Tushare](https://tushare.pro/)
+- 全市场股票列表：[全市场股票列表](https://www.sse.com.cn/assortment/stock/list/share/)
